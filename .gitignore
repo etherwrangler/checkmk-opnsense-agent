@@ -1,0 +1,2 @@
+# Local credentials for the Checkmk test instance.
+.checkmk-api.env
