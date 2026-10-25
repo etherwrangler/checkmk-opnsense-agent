@@ -80,6 +80,7 @@ SYSHOOK_METHOD = re.findall(r"rc\.syshook\.d\/(start|stop)/",SCRIPTPATH)
 BASEDIR = "/usr/local/check_mk_agent"
 VARDIR = "/var/lib/check_mk_agent"
 CHECKMK_CONFIG = "/usr/local/etc/checkmk.conf"
+SMARTCTL_PATH = "/usr/local/sbin/smartctl"
 MK_CONFDIR = os.path.dirname(CHECKMK_CONFIG)
 LOCALDIR = os.path.join(BASEDIR,"local")
 PLUGINSDIR = os.path.join(BASEDIR,"plugins")
@@ -1302,7 +1303,7 @@ class checkmk_checker(object):
         return _ret
 
     def check_smartinfo(self):
-        if not os.path.exists("/usr/local/sbin/smartctl"):
+        if not os.path.exists(SMARTCTL_PATH):
             return []
         REGEX_DISCPATH = re.compile(r"(sd[a-z]+|da[0-9]+|nvme[0-9]+|ada[0-9]+)$")
         _ret = ["<<<disk_smart_info:sep(124)>>>"]
@@ -1311,6 +1312,56 @@ class checkmk_checker(object):
                 _ret.append(str(smart_disc(_dev)))
             except:
                 pass
+        return _ret
+
+    @staticmethod
+    def _run_smartctl(args, timeout=30):
+        try:
+            return subprocess.run(
+                [SMARTCTL_PATH] + args,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+
+    def check_smart_posix(self):
+        if not os.path.exists(SMARTCTL_PATH):
+            return []
+
+        _version = self._run_smartctl(["-V"], timeout=10)
+        if not re.search(r"^smartctl 7(?:\.|\s)", _version, re.M):
+            return []
+
+        _ret = []
+        for _section, _use_scan_args in (
+            ("smart_posix_all", False),
+            ("smart_posix_scan_arg", True),
+        ):
+            _ret.append(f"<<<{_section}:sep(0)>>>")
+            _scan_output = self._run_smartctl(["--scan"], timeout=10)
+            for _scan_line in _scan_output.splitlines():
+                _device_args = _scan_line.partition("#")[0].strip()
+                if not _device_args:
+                    continue
+                try:
+                    _device_args = shlex.split(_device_args)
+                except ValueError:
+                    continue
+                if not _device_args:
+                    continue
+                if not _use_scan_args:
+                    _device_args = _device_args[:1]
+                _output = self._run_smartctl(
+                    ["--all", "--json=c"] + _device_args
+                )
+                if _output:
+                    _ret.append(_output.rstrip("\n"))
+                _ret.append("")
         return _ret
 
     def check_ipmi(self):
